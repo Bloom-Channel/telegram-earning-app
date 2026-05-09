@@ -11,18 +11,22 @@ app.use(express.json());
 app.get('/api/user/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   
-  try {
-    let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
+  db.get('SELECT * FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
     
     if (!user) {
-      // Create new user
-      db.prepare('INSERT INTO users (telegram_id, username) VALUES (?, ?)').run(telegramId, req.query.username || 'anonymous');
-      user = { balance: 0, total_earned: 0, last_farm_time: 0 };
+      db.run(
+        'INSERT INTO users (telegram_id, username) VALUES (?, ?)',
+        [telegramId, req.query.username || 'anonymous'],
+        function(err) {
+          if (err) return res.status(500).json({ error: err.message });
+          return res.json({ balance: 0, total_earned: 0, last_farm_time: 0 });
+        }
+      );
+    } else {
+      res.json(user);
     }
-    res.json(user);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Farm action - earn coins
@@ -31,8 +35,8 @@ app.post('/api/farm/:telegramId', (req, res) => {
   const FARM_AMOUNT = 100;
   const COOLDOWN_SECONDS = 300; // 5 minutes
   
-  try {
-    const user = db.prepare('SELECT last_farm_time FROM users WHERE telegram_id = ?').get(telegramId);
+  db.get('SELECT last_farm_time FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
     
     const now = Math.floor(Date.now() / 1000);
     const timeSinceLastFarm = now - (user?.last_farm_time || 0);
@@ -45,20 +49,23 @@ app.post('/api/farm/:telegramId', (req, res) => {
       });
     }
     
-    db.prepare('UPDATE users SET balance = balance + ?, total_earned = total_earned + ?, last_farm_time = ? WHERE telegram_id = ?')
-      .run(FARM_AMOUNT, FARM_AMOUNT, now, telegramId);
-    
-    const updated = db.prepare('SELECT balance FROM users WHERE telegram_id = ?').get(telegramId);
-    
-    res.json({ 
-      success: true, 
-      earned: FARM_AMOUNT, 
-      newBalance: updated.balance,
-      nextAvailable: now + COOLDOWN_SECONDS
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    db.run(
+      'UPDATE users SET balance = balance + ?, total_earned = total_earned + ?, last_farm_time = ? WHERE telegram_id = ?',
+      [FARM_AMOUNT, FARM_AMOUNT, now, telegramId],
+      function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, updated) => {
+          res.json({ 
+            success: true, 
+            earned: FARM_AMOUNT, 
+            newBalance: updated.balance,
+            nextAvailable: now + COOLDOWN_SECONDS
+          });
+        });
+      }
+    );
+  });
 });
 
 // Complete a task
@@ -66,24 +73,31 @@ app.post('/api/complete-task/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   const { taskId, reward } = req.body;
   
-  try {
-    const existing = db.prepare('SELECT * FROM completed_tasks WHERE telegram_id = ? AND task_id = ?').get(telegramId, taskId);
-    
-    if (existing) {
-      return res.status(400).json({ error: 'Task already completed' });
+  db.get(
+    'SELECT * FROM completed_tasks WHERE telegram_id = ? AND task_id = ?',
+    [telegramId, taskId],
+    (err, existing) => {
+      if (existing) {
+        return res.status(400).json({ error: 'Task already completed' });
+      }
+      
+      db.serialize(() => {
+        db.run(
+          'INSERT INTO completed_tasks (telegram_id, task_id, completed_at) VALUES (?, ?, ?)',
+          [telegramId, taskId, Math.floor(Date.now() / 1000)]
+        );
+        
+        db.run(
+          'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE telegram_id = ?',
+          [reward, reward, telegramId]
+        );
+        
+        db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+          res.json({ success: true, reward, newBalance: user.balance });
+        });
+      });
     }
-    
-    db.prepare('INSERT INTO completed_tasks (telegram_id, task_id, completed_at) VALUES (?, ?, ?)')
-      .run(telegramId, taskId, Math.floor(Date.now() / 1000));
-    
-    db.prepare('UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE telegram_id = ?')
-      .run(reward, reward, telegramId);
-    
-    const user = db.prepare('SELECT balance FROM users WHERE telegram_id = ?').get(telegramId);
-    res.json({ success: true, reward, newBalance: user.balance });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  );
 });
 
 // Request withdrawal
@@ -96,32 +110,34 @@ app.post('/api/withdraw/:telegramId', (req, res) => {
     return res.status(400).json({ error: `Minimum withdrawal is ${MIN_WITHDRAWAL} coins` });
   }
   
-  try {
-    const user = db.prepare('SELECT balance FROM users WHERE telegram_id = ?').get(telegramId);
-    
+  db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
     if (user.balance < amount) {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
     
-    db.prepare('UPDATE users SET balance = balance - ? WHERE telegram_id = ?').run(amount, telegramId);
-    db.prepare('INSERT INTO withdrawals (telegram_id, amount) VALUES (?, ?)').run(telegramId, amount);
+    db.run('BEGIN TRANSACTION');
+    db.run('UPDATE users SET balance = balance - ? WHERE telegram_id = ?', [amount, telegramId]);
+    db.run(
+      'INSERT INTO withdrawals (telegram_id, amount) VALUES (?, ?)',
+      [telegramId, amount]
+    );
+    db.run('COMMIT');
     
     res.json({ success: true, message: 'Withdrawal request submitted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Get referral stats
 app.get('/api/referrals/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   
-  try {
-    const referrals = db.prepare('SELECT telegram_id, username, total_earned FROM users WHERE referrer_id = ? ORDER BY created_at DESC').all(telegramId);
-    res.json({ count: referrals.length, referrals });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  db.all(
+    'SELECT telegram_id, username, total_earned FROM users WHERE referrer_id = ? ORDER BY created_at DESC',
+    [telegramId],
+    (err, referrals) => {
+      res.json({ count: referrals.length, referrals });
+    }
+  );
 });
 
 const PORT = process.env.PORT || 3000;
