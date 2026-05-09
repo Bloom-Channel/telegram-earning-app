@@ -1,40 +1,121 @@
-const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
 const path = require('path');
 
-const db = new sqlite3.Database(path.join(__dirname, 'earnings.db'));
+const DB_PATH = path.join(__dirname, 'database.json');
 
-// Initialize database tables
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      telegram_id TEXT PRIMARY KEY,
-      username TEXT,
-      balance INTEGER DEFAULT 0,
-      total_earned INTEGER DEFAULT 0,
-      last_farm_time INTEGER DEFAULT 0,
-      referrer_id TEXT,
-      created_at INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-  `);
+// Initialize database file if it doesn't exist
+if (!fs.existsSync(DB_PATH)) {
+    const initialData = {
+        users: {},
+        completedTasks: [],
+        withdrawals: [],
+        nextId: 1
+    };
+    fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2));
+}
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS completed_tasks (
-      telegram_id TEXT,
-      task_id TEXT,
-      completed_at INTEGER,
-      PRIMARY KEY (telegram_id, task_id)
-    )
-  `);
+// Helper to read database
+function readDB() {
+    const data = fs.readFileSync(DB_PATH, 'utf8');
+    return JSON.parse(data);
+}
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS withdrawals (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      telegram_id TEXT,
-      amount INTEGER,
-      status TEXT DEFAULT 'pending',
-      requested_at INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-  `);
-});
+// Helper to write database
+function writeDB(data) {
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+}
 
-module.exports = db;
+// User functions
+function getUser(telegramId) {
+    const db = readDB();
+    return db.users[telegramId] || null;
+}
+
+function createUser(telegramId, username, referrerId = null) {
+    const db = readDB();
+    
+    if (db.users[telegramId]) {
+        return db.users[telegramId];
+    }
+    
+    const newUser = {
+        telegram_id: telegramId,
+        username: username || 'anonymous',
+        balance: 0,
+        total_earned: 0,
+        last_farm_time: 0,
+        referrer_id: referrerId,
+        created_at: Math.floor(Date.now() / 1000)
+    };
+    
+    db.users[telegramId] = newUser;
+    writeDB(db);
+    return newUser;
+}
+
+function updateUser(telegramId, updates) {
+    const db = readDB();
+    if (db.users[telegramId]) {
+        db.users[telegramId] = { ...db.users[telegramId], ...updates };
+        writeDB(db);
+        return db.users[telegramId];
+    }
+    return null;
+}
+
+// Task functions
+function isTaskCompleted(telegramId, taskId) {
+    const db = readDB();
+    return db.completedTasks.some(t => t.telegram_id === telegramId && t.task_id === taskId);
+}
+
+function completeTask(telegramId, taskId, completedAt) {
+    const db = readDB();
+    db.completedTasks.push({
+        telegram_id: telegramId,
+        task_id: taskId,
+        completed_at: completedAt
+    });
+    writeDB(db);
+}
+
+// Withdrawal functions
+function addWithdrawal(telegramId, amount) {
+    const db = readDB();
+    const withdrawal = {
+        id: db.nextId++,
+        telegram_id: telegramId,
+        amount: amount,
+        status: 'pending',
+        requested_at: Math.floor(Date.now() / 1000)
+    };
+    db.withdrawals.push(withdrawal);
+    writeDB(db);
+    return withdrawal;
+}
+
+// Referral functions
+function getReferrals(telegramId) {
+    const db = readDB();
+    const referrals = [];
+    for (const [id, user] of Object.entries(db.users)) {
+        if (user.referrer_id === telegramId) {
+            referrals.push({
+                telegram_id: id,
+                username: user.username,
+                total_earned: user.total_earned
+            });
+        }
+    }
+    return referrals;
+}
+
+module.exports = {
+    getUser,
+    createUser,
+    updateUser,
+    isTaskCompleted,
+    completeTask,
+    addWithdrawal,
+    getReferrals
+};
