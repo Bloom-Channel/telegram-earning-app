@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>CoinFarm - Earn Daily</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="balance-card">
+                <div class="balance-label">💰 Your Balance</div>
+                <div class="balance-amount" id="balance">0</div>
+                <div class="total-earned">Total Earned: <span id="totalEarned">0</span></div>
+            </div>
+        </div>
+
+        <!-- Main Farm Button -->
+        <div class="farm-section">
+            <div class="farm-circle" id="farmButton">
+                <div class="farm-icon">🌾</div>
+                <div class="farm-text">FARM</div>
+            </div>
+            <div class="cooldown-timer" id="cooldownTimer"></div>
+            <div class="farm-hint">Tap to earn 100 coins</div>
+        </div>
+
+        <!-- Tasks Section -->
+        <div class="section">
+            <div class="section-title">📋 Complete Tasks</div>
+            <div class="tasks-list" id="tasksList">
+                <!-- Tasks loaded dynamically -->
+            </div>
+        </div>
+
+        <!-- Referral Section -->
+        <div class="section">
+            <div class="section-title">👥 Refer & Earn</div>
+            <div class="referral-box">
+                <div class="referral-stats">
+                    <span>👥 Friends: <span id="referralCount">0</span></span>
+                    <span>🎁 Earn 500 per friend</span>
+                </div>
+                <div class="referral-link-box">
+                    <input type="text" id="referralLink" readonly>
+                    <button id="copyLinkBtn">📋 Copy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Withdrawal Section -->
+        <div class="section">
+            <div class="section-title">💸 Withdraw</div>
+            <div class="withdraw-box">
+                <input type="number" id="withdrawAmount" placeholder="Enter amount (min 5000)">
+                <button id="withdrawBtn">Request Withdrawal</button>
+                <div class="withdraw-note">💡 Withdrawals processed within 24 hours</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
