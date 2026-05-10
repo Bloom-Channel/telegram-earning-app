@@ -79,13 +79,14 @@ function completeTask(telegramId, taskId, completedAt) {
     writeDB(db);
 }
 
-// Withdrawal functions
-function addWithdrawal(telegramId, amount) {
+// wWithdrawal function
+function addWithdrawal(telegramId, amount, fee = 0) {
     const db = readDB();
     const withdrawal = {
         id: db.nextId++,
         telegram_id: telegramId,
         amount: amount,
+        fee: fee,
         status: 'pending',
         requested_at: Math.floor(Date.now() / 1000)
     };
