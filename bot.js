@@ -2,14 +2,18 @@ const { Telegraf } = require('telegraf');
 require('dotenv').config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const APP_URL = process.env.APP_URL; // Your frontend URL (Netlify, Vercel, etc.)
+const APP_URL = process.env.APP_URL || 'https://calm-douhua-3616ca.netlify.app';
+
+if (!BOT_TOKEN) {
+    console.error('❌ BOT_TOKEN is missing! Check your .env file');
+    process.exit(1);
+}
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// Start command
+// Fixed /start command with correct button structure
 bot.start((ctx) => {
-    const referrerId = ctx.payload; // Get referral ID from start param
-    const appUrl = referrerId ? `${APP_URL}?ref=${referrerId}` : APP_URL;
+    console.log('✅ /start received from:', ctx.from.username || ctx.from.id);
     
     ctx.replyWithHTML(
         `🎉 <b>Welcome to CoinFarm!</b> 🎉\n\n` +
@@ -22,32 +26,37 @@ bot.start((ctx) => {
         {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '🚀 Open CoinFarm', web_app: { url: appUrl } }],
-                    [{ text: '📢 Join Community', url: 'https://t.me/your_channel' }]
+                    [{ text: "🚀 Open CoinFarm", web_app: { url: APP_URL } }],  // Fixed: web_app object with url
+                    [{ text: "📢 Join Community", url: "https://t.me/your_channel" }]
                 ]
             }
         }
     );
 });
 
-// Help command
-bot.help((ctx) => {
-    ctx.reply(
-        `📖 <b>Help Guide</b>\n\n` +
-        `1. Click "Open CoinFarm" to launch the mini-app\n` +
-        `2. Tap the big farm button every hour\n` +
-        `3. Complete tasks for extra coins\n` +
-        `4. Share your referral link with friends\n` +
-        `5. Withdraw when you reach 5000 coins\n\n` +
-        `Minimum withdrawal: 5000 coins`,
-        { parse_mode: 'HTML' }
-    );
+// Simple echo to test if bot is receiving messages
+bot.on('text', (ctx) => {
+    if (!ctx.message.text.startsWith('/')) {
+        ctx.reply(`Send /start to open the app!`);
+    }
 });
 
-// Launch bot
+// Error handler
+bot.catch((err, ctx) => {
+    console.error('❌ Bot error:', err);
+    ctx.reply('Something went wrong. Please try again later.');
+});
+
+// Launch the bot
 bot.launch()
-    .then(() => console.log('Bot is running'))
-    .catch(err => console.error('Bot error:', err));
+    .then(() => {
+        console.log('✅ Bot is running and ready!');
+        console.log(`📱 App URL: ${APP_URL}`);
+        console.log('💬 Test by messaging your bot on Telegram: /start');
+    })
+    .catch(err => {
+        console.error('❌ Failed to launch bot:', err);
+    });
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
