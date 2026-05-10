@@ -15,12 +15,18 @@ tg.expand(); // Expand to full screen
 
 let userData = null;
 
-// Tasks configuration
+// Tasks configuration (NO invite task - referrals are automatic)
 const TASKS = [
     { id: 'join_channel', name: 'Join Our Channel', reward: 500, url: COMMUNITY_LINKS.channel },
-    { id: 'join_group', name: 'Join Community Group', reward: 300, url: COMMUNITY_LINKS.group },
-    { id: 'invite_friend', name: 'Invite 1 Friend', reward: 1000, url: null, special: 'referral' }
+    { id: 'join_group', name: 'Join Community Group', reward: 300, url: COMMUNITY_LINKS.group }
 ];
+
+// Coin packs for purchase
+const COIN_PACKS = {
+    small: { stars: 5, coins: 500, name: 'Small Pack' },
+    medium: { stars: 20, coins: 2500, name: 'Medium Pack' },
+    large: { stars: 50, coins: 7500, name: 'Large Pack' }
+};
 
 // Initialize
 async function init() {
@@ -41,6 +47,7 @@ async function init() {
     loadTasks();
     loadReferralStats();
     updateReferralLinkDisplay(telegramId);
+    setupPurchaseButtons();
     
     // Setup event listeners
     document.getElementById('farmButton').addEventListener('click', () => farm(telegramId));
@@ -87,7 +94,6 @@ async function farm(telegramId) {
         document.getElementById('balance').textContent = result.newBalance;
         showToast(`+${result.earned} coins!`);
         
-        // Add animation
         const farmCircle = document.querySelector('.farm-circle');
         farmCircle.style.transform = 'scale(0.95)';
         setTimeout(() => {
@@ -131,6 +137,8 @@ function startCooldown(nextAvailableTimestamp) {
 
 function loadTasks() {
     const tasksList = document.getElementById('tasksList');
+    if (!tasksList) return;
+    
     tasksList.innerHTML = '';
     
     TASKS.forEach(task => {
@@ -195,7 +203,10 @@ async function loadReferralStats() {
     try {
         const response = await fetch(`${API_URL}/referrals/${telegramId}`);
         const data = await response.json();
-        document.getElementById('referralCount').textContent = data.count;
+        const referralCountEl = document.getElementById('referralCount');
+        if (referralCountEl) {
+            referralCountEl.textContent = data.count;
+        }
     } catch (error) {
         console.error('Referral error:', error);
     }
@@ -254,8 +265,87 @@ async function withdraw(telegramId) {
     }
 }
 
+// ========== PURCHASE / SHOP FUNCTIONS ==========
+
+function setupPurchaseButtons() {
+    // Small pack
+    const smallBtn = document.getElementById('buySmall');
+    if (smallBtn) {
+        smallBtn.addEventListener('click', () => purchaseCoins('small'));
+    }
+    
+    // Medium pack
+    const mediumBtn = document.getElementById('buyMedium');
+    if (mediumBtn) {
+        mediumBtn.addEventListener('click', () => purchaseCoins('medium'));
+    }
+    
+    // Large pack
+    const largeBtn = document.getElementById('buyLarge');
+    if (largeBtn) {
+        largeBtn.addEventListener('click', () => purchaseCoins('large'));
+    }
+}
+
+async function purchaseCoins(packId) {
+    const telegramId = tg.initDataUnsafe?.user?.id;
+    
+    if (!telegramId) {
+        showToast('User not found. Please restart the app.');
+        return;
+    }
+    
+    const pack = COIN_PACKS[packId];
+    if (!pack) {
+        showToast('Invalid pack selected.');
+        return;
+    }
+    
+    showToast('Creating invoice...');
+    
+    try {
+        const response = await fetch(`${API_URL}/create-invoice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegramId: telegramId,
+                starsAmount: pack.stars,
+                coinAmount: pack.coins
+            })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to create invoice');
+        }
+        
+        const data = await response.json();
+        const invoiceLink = data.invoiceLink;
+        
+        // Open Telegram Stars payment window
+        tg.openInvoice(invoiceLink, (status) => {
+            if (status === 'paid') {
+                showToast(`✅ Purchase successful! +${pack.coins} coins added!`);
+                // Refresh balance
+                loadUserData(telegramId, null, null);
+                tg.HapticFeedback.notificationOccurred('success');
+            } else if (status === 'failed') {
+                showToast('❌ Payment failed. Please try again.');
+            } else if (status === 'cancelled') {
+                showToast('Payment was cancelled.');
+            }
+        });
+        
+    } catch (error) {
+        console.error('Purchase error:', error);
+        showToast(`Error: ${error.message}`);
+    }
+}
+
 function showToast(message) {
     const toast = document.getElementById('toast');
+    if (!toast) return;
+    
     toast.textContent = message;
     toast.classList.add('show');
     setTimeout(() => {
