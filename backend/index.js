@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const db = require('./fileDatabase');
+const db = require('./database');
 require('dotenv').config();
 
 const app = express();
@@ -9,61 +9,106 @@ app.use(express.json());
 
 const FARM_AMOUNT = 100;
 const COOLDOWN_SECONDS = 300; // 5 minutes
+const WITHDRAWAL_FEE_PERCENT = 10; // 10% platform fee
+const REFERRAL_BONUS = 500; // Coins earned by referrer when friend joins
 
-// Get user data
+// Get user data (with automatic referral bonus)
 app.get('/api/user/:telegramId', (req, res) => {
     const { telegramId } = req.params;
     const username = req.query.username || 'anonymous';
-    const referrerId = req.query.ref || null;
+    const referrerId = req.query.ref || null; // Get referrer from URL parameter
     
-    let user = db.getUser(telegramId);
-    
-    if (!user) {
-        user = db.createUser(telegramId, username, referrerId);
-    }
-    
-    res.json({
-        balance: user.balance,
-        total_earned: user.total_earned,
-        last_farm_time: user.last_farm_time
+    // First, check if user exists
+    db.get('SELECT * FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        
+        if (!user) {
+            // NEW USER - Check if they came from a referral link
+            if (referrerId && referrerId !== telegramId) {
+                // Verify referrer exists
+                db.get('SELECT telegram_id FROM users WHERE telegram_id = ?', [referrerId], (err, referrer) => {
+                    if (referrer) {
+                        // Award bonus to the referrer
+                        db.run('UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE telegram_id = ?', 
+                            [REFERRAL_BONUS, REFERRAL_BONUS, referrerId], (err) => {
+                            if (!err) {
+                                console.log(`✅ Referrer ${referrerId} earned ${REFERRAL_BONUS} coins for referring ${telegramId}`);
+                            }
+                        });
+                    }
+                    
+                    // Create new user with referrer
+                    db.run('INSERT INTO users (telegram_id, username, referrer_id) VALUES (?, ?, ?)',
+                        [telegramId, username, referrerId], function(err) {
+                        if (err) {
+                            return res.status(500).json({ error: err.message });
+                        }
+                        return res.json({ balance: 0, total_earned: 0, last_farm_time: 0 });
+                    });
+                });
+            } else {
+                // Create user without referrer
+                db.run('INSERT INTO users (telegram_id, username) VALUES (?, ?)',
+                    [telegramId, username], function(err) {
+                    if (err) {
+                        return res.status(500).json({ error: err.message });
+                    }
+                    return res.json({ balance: 0, total_earned: 0, last_farm_time: 0 });
+                });
+            }
+        } else {
+            // Existing user - return their data
+            res.json({
+                balance: user.balance,
+                total_earned: user.total_earned,
+                last_farm_time: user.last_farm_time,
+                referrer_id: user.referrer_id
+            });
+        }
     });
 });
 
-// Farm action
+// Farm action - earn coins
 app.post('/api/farm/:telegramId', (req, res) => {
     const { telegramId } = req.params;
     
-    let user = db.getUser(telegramId);
-    
-    if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-    }
-    
-    const now = Math.floor(Date.now() / 1000);
-    const timeSinceLastFarm = now - (user.last_farm_time || 0);
-    
-    if (timeSinceLastFarm < COOLDOWN_SECONDS) {
-        const waitTime = COOLDOWN_SECONDS - timeSinceLastFarm;
-        return res.status(400).json({
-            error: `Wait ${Math.ceil(waitTime / 60)} minutes`,
-            nextAvailable: user.last_farm_time + COOLDOWN_SECONDS
+    db.get('SELECT last_farm_time, balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const now = Math.floor(Date.now() / 1000);
+        const timeSinceLastFarm = now - (user.last_farm_time || 0);
+        
+        if (timeSinceLastFarm < COOLDOWN_SECONDS) {
+            const waitTime = COOLDOWN_SECONDS - timeSinceLastFarm;
+            return res.status(400).json({ 
+                error: `Wait ${Math.ceil(waitTime / 60)} minutes`,
+                nextAvailable: user.last_farm_time + COOLDOWN_SECONDS
+            });
+        }
+        
+        const newBalance = user.balance + FARM_AMOUNT;
+        
+        db.run('UPDATE users SET balance = ?, total_earned = total_earned + ?, last_farm_time = ? WHERE telegram_id = ?',
+            [newBalance, FARM_AMOUNT, now, telegramId], function(err) {
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            
+            res.json({ 
+                success: true, 
+                earned: FARM_AMOUNT, 
+                newBalance: newBalance,
+                nextAvailable: now + COOLDOWN_SECONDS
+            });
         });
-    }
-    
-    const newBalance = user.balance + FARM_AMOUNT;
-    const newTotalEarned = user.total_earned + FARM_AMOUNT;
-    
-    db.updateUser(telegramId, {
-        balance: newBalance,
-        total_earned: newTotalEarned,
-        last_farm_time: now
-    });
-    
-    res.json({
-        success: true,
-        earned: FARM_AMOUNT,
-        newBalance: newBalance,
-        nextAvailable: now + COOLDOWN_SECONDS
     });
 });
 
@@ -72,46 +117,53 @@ app.post('/api/complete-task/:telegramId', (req, res) => {
     const { telegramId } = req.params;
     const { taskId, reward } = req.body;
     
-    if (db.isTaskCompleted(telegramId, taskId)) {
-        return res.status(400).json({ error: 'Task already completed' });
-    }
-    
-    const user = db.getUser(telegramId);
-    if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-    }
-    
-    const newBalance = user.balance + reward;
-    const newTotalEarned = user.total_earned + reward;
-    
-    db.updateUser(telegramId, {
-        balance: newBalance,
-        total_earned: newTotalEarned
-    });
-    
-    db.completeTask(telegramId, taskId, Math.floor(Date.now() / 1000));
-    
-    res.json({
-        success: true,
-        reward: reward,
-        newBalance: newBalance
+    // Check if task already completed
+    db.get('SELECT * FROM completed_tasks WHERE telegram_id = ? AND task_id = ?', 
+        [telegramId, taskId], (err, existing) => {
+        
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        
+        if (existing) {
+            return res.status(400).json({ error: 'Task already completed' });
+        }
+        
+        // Get current user balance
+        db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+            if (err || !user) {
+                return res.status(500).json({ error: 'User not found' });
+            }
+            
+            const newBalance = user.balance + reward;
+            
+            // Record completion and add reward
+            db.run('BEGIN TRANSACTION');
+            db.run('INSERT INTO completed_tasks (telegram_id, task_id, completed_at) VALUES (?, ?, ?)',
+                [telegramId, taskId, Math.floor(Date.now() / 1000)]);
+            db.run('UPDATE users SET balance = ?, total_earned = total_earned + ? WHERE telegram_id = ?',
+                [newBalance, reward, telegramId]);
+            db.run('COMMIT');
+            
+            res.json({ success: true, reward, newBalance: newBalance });
+        });
     });
 });
-
 
 // Request withdrawal with fee
 app.post('/api/withdraw/:telegramId', (req, res) => {
     const { telegramId } = req.params;
     const { amount } = req.body;
     const MIN_WITHDRAWAL = 5000;
-    const WITHDRAWAL_FEE_PERCENT = 10; // 10% platform fee
     
     if (amount < MIN_WITHDRAWAL) {
         return res.status(400).json({ error: `Minimum withdrawal is ${MIN_WITHDRAWAL} coins` });
     }
     
     db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
         
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
@@ -127,16 +179,15 @@ app.post('/api/withdraw/:telegramId', (req, res) => {
         
         db.run('BEGIN TRANSACTION');
         db.run('UPDATE users SET balance = balance - ? WHERE telegram_id = ?', [amount, telegramId]);
-        db.run(
-            'INSERT INTO withdrawals (telegram_id, amount, fee, status) VALUES (?, ?, ?, ?)',
-            [telegramId, userAmount, fee, 'pending']
-        );
+        db.run('INSERT INTO withdrawals (telegram_id, amount, fee, status) VALUES (?, ?, ?, ?)',
+            [telegramId, userAmount, fee, 'pending']);
         db.run('COMMIT');
         
         res.json({ 
             success: true, 
-            message: `Withdrawal request submitted. Fee: ${fee} coins (${WITHDRAWAL_FEE_PERCENT}%)`, 
-            requestedAmount: userAmount 
+            message: `Withdrawal request submitted! Fee: ${fee} coins (${WITHDRAWAL_FEE_PERCENT}%)`,
+            requestedAmount: userAmount,
+            fee: fee
         });
     });
 });
@@ -144,58 +195,37 @@ app.post('/api/withdraw/:telegramId', (req, res) => {
 // Get referral stats
 app.get('/api/referrals/:telegramId', (req, res) => {
     const { telegramId } = req.params;
-    const referrals = db.getReferrals(telegramId);
-    res.json({ count: referrals.length, referrals });
+    
+    db.all('SELECT telegram_id, username, total_earned FROM users WHERE referrer_id = ? ORDER BY created_at DESC',
+        [telegramId], (err, referrals) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ count: referrals.length, referrals });
+    });
+});
+
+// Check if task is completed (for invite task verification)
+app.get('/api/check-task/:telegramId/:taskId', (req, res) => {
+    const { telegramId, taskId } = req.params;
+    
+    db.get('SELECT * FROM completed_tasks WHERE telegram_id = ? AND task_id = ?',
+        [telegramId, taskId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ completed: !!result });
+    });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: Date.now() });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-// Create Stars purchase order
-app.post('/api/create-star-order', (req, res) => {
-    const { telegramId, packId } = req.body;
-    
-    // Define packs
-    const packs = {
-        small: { stars: 5, coins: 500 },
-        medium: { stars: 20, coins: 2500 },
-        large: { stars: 50, coins: 7500 },
-        premium: { stars: 100, coins: 0, premium: true }
-    };
-    
-    const pack = packs[packId];
-    if (!pack) {
-        return res.status(400).json({ error: 'Invalid pack' });
-    }
-    
-    // Create order in database
-    const orderId = Math.random().toString(36).substring(7);
-    db.run(
-        'INSERT INTO orders (order_id, telegram_id, pack_id, stars, coins, status) VALUES (?, ?, ?, ?, ?, ?)',
-        [orderId, telegramId, packId, pack.stars, pack.coins, 'pending']
-    );
-    
-    // Return invoice link (you'll need to generate this via Telegram API)
-    res.json({ 
-        orderId: orderId,
-        stars: pack.stars,
-        coins: pack.coins,
-        invoice_link: `https://t.me/$YOUR_BOT_USERNAME/invoice?start=${orderId}`
-    });
-});
-
-// Verify purchase and grant coins
-app.post('/api/verify-star-purchase', (req, res) => {
-    const { orderId, telegramId } = req.body;
-    
-    db.get('SELECT * FROM orders WHERE order_id = ? AND telegram_id = ?', [orderId, telegramId], (err, order) => {
-        if (!order || order.status !== 'pending') {
-            return res.status(400).json({ error: 'Invalid order' });
-        }
-        
-        // Grant coins to user
-        db.run('UPDATE users SET balance = balance + ? WHERE telegram_id = ?', [order.coins, telegramId]);
-        db.run('UPDATE orders SET status = ? WHERE order_id = ?', ['completed', orderId]);
-        
-        res.json({ success: true, coins: order.coins });
-    });
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`💰 Withdrawal fee: ${WITHDRAWAL_FEE_PERCENT}%`);
+    console.log(`🎁 Referral bonus: ${REFERRAL_BONUS} coins`);
 });
