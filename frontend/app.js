@@ -1,40 +1,66 @@
-// TEST VERSION - For local browser testing only
+// PRODUCTION CONFIGURATION - CoinFarm
 const API_URL = 'https://telegram-earning-app.onrender.com/api';
 
-let tg = { initDataUnsafe: {} }; // Mock Telegram for browser
+// Your actual Telegram bot username (without @)
+const BOT_USERNAME = 'TGDock2026_bot';
+
+// Your community links
+const COMMUNITY_LINKS = {
+    group: 'https://t.me/Coinfarm_chat',
+    channel: 'https://t.me/coinfarm_updates'
+};
+
+let tg = window.Telegram.WebApp;
+tg.expand(); // Expand to full screen
+
 let userData = null;
 
 // Tasks configuration
 const TASKS = [
-    { id: 'join_channel', name: 'Join Our Channel', reward: 500, url: 'https://t.me/your_channel' },
-    { id: 'follow_twitter', name: 'Follow on Twitter', reward: 300, url: 'https://twitter.com/your_account' },
+    { id: 'join_channel', name: 'Join Our Channel', reward: 500, url: COMMUNITY_LINKS.channel },
+    { id: 'join_group', name: 'Join Community Group', reward: 300, url: COMMUNITY_LINKS.group },
     { id: 'invite_friend', name: 'Invite 1 Friend', reward: 1000, url: null, special: 'referral' }
 ];
 
-// Initialize with test user
+// Initialize
 async function init() {
-    const telegramId = 'test_user_123';
-    const username = 'test_user';
+    const telegramId = tg.initDataUnsafe?.user?.id;
+    const username = tg.initDataUnsafe?.user?.username;
     
-    await loadUserData(telegramId, username);
+    if (!telegramId) {
+        showToast('Please open this app from Telegram');
+        return;
+    }
+    
+    // Check for referral in URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const referrerId = urlParams.get('ref');
+    
+    // Load user data
+    await loadUserData(telegramId, username, referrerId);
     loadTasks();
     loadReferralStats();
+    updateReferralLinkDisplay(telegramId);
     
+    // Setup event listeners
     document.getElementById('farmButton').addEventListener('click', () => farm(telegramId));
-    document.getElementById('copyLinkBtn').addEventListener('click', copyReferralLink);
+    document.getElementById('copyLinkBtn').addEventListener('click', () => copyReferralLink(telegramId));
     document.getElementById('withdrawBtn').addEventListener('click', () => withdraw(telegramId));
 }
 
-async function loadUserData(telegramId, username) {
+async function loadUserData(telegramId, username, referrerId) {
     try {
-        const response = await fetch(`${API_URL}/user/${telegramId}?username=${username}`);
+        let url = `${API_URL}/user/${telegramId}?username=${username}`;
+        if (referrerId) url += `&ref=${referrerId}`;
+        
+        const response = await fetch(url);
         userData = await response.json();
         
         document.getElementById('balance').textContent = userData.balance || 0;
         document.getElementById('totalEarned').textContent = userData.total_earned || 0;
     } catch (error) {
         console.error('Error loading user:', error);
-        showToast('Failed to connect to backend. Is it running?');
+        showToast('Failed to load data');
     }
 }
 
@@ -73,7 +99,7 @@ async function farm(telegramId) {
         }
     } catch (error) {
         console.error('Farm error:', error);
-        showToast('Network error - is backend running on port 3000?');
+        showToast('Network error');
     } finally {
         farmBtn.style.pointerEvents = 'auto';
     }
@@ -125,7 +151,7 @@ function loadTasks() {
     
     document.querySelectorAll('.task-button').forEach(btn => {
         btn.addEventListener('click', async (e) => {
-            const telegramId = 'test_user_123';
+            const telegramId = tg.initDataUnsafe?.user?.id;
             const taskId = btn.dataset.taskId;
             const reward = parseInt(btn.dataset.reward);
             const url = btn.dataset.url;
@@ -164,25 +190,38 @@ async function completeTask(telegramId, taskId, reward) {
 }
 
 async function loadReferralStats() {
-    const telegramId = 'test_user_123';
+    const telegramId = tg.initDataUnsafe?.user?.id;
     
     try {
         const response = await fetch(`${API_URL}/referrals/${telegramId}`);
         const data = await response.json();
-        document.getElementById('referralCount').textContent = data.count || 0;
+        document.getElementById('referralCount').textContent = data.count;
     } catch (error) {
         console.error('Referral error:', error);
     }
 }
 
-function copyReferralLink() {
-    const link = `https://t.me/YourBotUsername/app?ref=test_user_123`;
+function updateReferralLinkDisplay(telegramId) {
+    const referralLink = `https://t.me/${BOT_USERNAME}/app?ref=${telegramId}`;
+    const linkInput = document.getElementById('referralLink');
+    if (linkInput) {
+        linkInput.value = referralLink;
+    }
+}
+
+function copyReferralLink(telegramId) {
+    const referralLink = `https://t.me/${BOT_USERNAME}/app?ref=${telegramId}`;
     
-    navigator.clipboard.writeText(link);
-    showToast('Referral link copied!');
+    navigator.clipboard.writeText(referralLink).then(() => {
+        showToast('✅ Referral link copied! Share with friends!');
+    }).catch(() => {
+        showToast('❌ Failed to copy. Copy manually below.');
+    });
     
     const linkInput = document.getElementById('referralLink');
-    linkInput.value = link;
+    if (linkInput) {
+        linkInput.value = referralLink;
+    }
 }
 
 async function withdraw(telegramId) {
@@ -201,9 +240,10 @@ async function withdraw(telegramId) {
         });
         
         if (response.ok) {
-            showToast('Withdrawal request submitted!');
+            const result = await response.json();
+            showToast(result.message || 'Withdrawal request submitted!');
             document.getElementById('withdrawAmount').value = '';
-            await loadUserData(telegramId, null);
+            await loadUserData(telegramId, null, null);
         } else {
             const error = await response.json();
             showToast(error.error);
@@ -222,48 +262,6 @@ function showToast(message) {
         toast.classList.remove('show');
     }, 2000);
 }
-// Shop purchase handler
-async function purchaseCoins(packId) {
-    const telegramId = tg.initDataUnsafe?.user?.id || 'test_user_123';
-    
-    try {
-        const response = await fetch(`${API_URL}/create-star-order`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ telegramId, packId })
-        });
-        
-        const order = await response.json();
-        
-        // Open Telegram Stars invoice
-        tg.openInvoice(order.invoice_link, async (status) => {
-            if (status === 'paid') {
-                // Verify purchase and grant coins
-                const verifyResponse = await fetch(`${API_URL}/verify-star-purchase`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ orderId: order.orderId, telegramId })
-                });
-                
-                const result = await verifyResponse.json();
-                if (result.success) {
-                    showToast(`+${result.coins} coins added!`);
-                    // Refresh balance
-                    await loadUserData(telegramId, null);
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Purchase error:', error);
-        showToast('Purchase failed. Try again.');
-    }
-}
 
-// Add event listeners for buy buttons
-document.querySelectorAll('.shop-item').forEach(item => {
-    const btn = item.querySelector('.buy-btn');
-    const packId = item.dataset.pack;
-    btn.addEventListener('click', () => purchaseCoins(packId));
-});
 // Start the app
 init();
