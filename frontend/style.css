@@ -230,3 +230,39 @@ body {
 .toast.show {
     transform: translateX(-50%) translateY(0);
 }
+.shop-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.shop-item {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 12px;
+    text-align: center;
+}
+
+.shop-stars {
+    font-size: 14px;
+    font-weight: bold;
+    color: #ffc107;
+}
+
+.shop-coins {
+    font-size: 16px;
+    font-weight: bold;
+    color: #4caf50;
+    margin: 5px 0;
+}
+
+.buy-btn {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    padding: 8px 16px;
+    border-radius: 20px;
+    color: white;
+    cursor: pointer;
+    width: 100%;
+}

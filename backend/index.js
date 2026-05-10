@@ -98,30 +98,47 @@ app.post('/api/complete-task/:telegramId', (req, res) => {
     });
 });
 
-// Request withdrawal
+
+// Request withdrawal with fee
 app.post('/api/withdraw/:telegramId', (req, res) => {
     const { telegramId } = req.params;
     const { amount } = req.body;
     const MIN_WITHDRAWAL = 5000;
+    const WITHDRAWAL_FEE_PERCENT = 10; // 10% platform fee
     
     if (amount < MIN_WITHDRAWAL) {
         return res.status(400).json({ error: `Minimum withdrawal is ${MIN_WITHDRAWAL} coins` });
     }
     
-    const user = db.getUser(telegramId);
-    if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-    }
-    
-    if (user.balance < amount) {
-        return res.status(400).json({ error: 'Insufficient balance' });
-    }
-    
-    const newBalance = user.balance - amount;
-    db.updateUser(telegramId, { balance: newBalance });
-    db.addWithdrawal(telegramId, amount);
-    
-    res.json({ success: true, message: 'Withdrawal request submitted' });
+    db.get('SELECT balance FROM users WHERE telegram_id = ?', [telegramId], (err, user) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        if (user.balance < amount) {
+            return res.status(400).json({ error: 'Insufficient balance' });
+        }
+        
+        // Calculate fee
+        const fee = Math.floor(amount * WITHDRAWAL_FEE_PERCENT / 100);
+        const userAmount = amount - fee;
+        
+        db.run('BEGIN TRANSACTION');
+        db.run('UPDATE users SET balance = balance - ? WHERE telegram_id = ?', [amount, telegramId]);
+        db.run(
+            'INSERT INTO withdrawals (telegram_id, amount, fee, status) VALUES (?, ?, ?, ?)',
+            [telegramId, userAmount, fee, 'pending']
+        );
+        db.run('COMMIT');
+        
+        res.json({ 
+            success: true, 
+            message: `Withdrawal request submitted. Fee: ${fee} coins (${WITHDRAWAL_FEE_PERCENT}%)`, 
+            requestedAmount: userAmount 
+        });
+    });
 });
 
 // Get referral stats
@@ -133,3 +150,52 @@ app.get('/api/referrals/:telegramId', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Create Stars purchase order
+app.post('/api/create-star-order', (req, res) => {
+    const { telegramId, packId } = req.body;
+    
+    // Define packs
+    const packs = {
+        small: { stars: 5, coins: 500 },
+        medium: { stars: 20, coins: 2500 },
+        large: { stars: 50, coins: 7500 },
+        premium: { stars: 100, coins: 0, premium: true }
+    };
+    
+    const pack = packs[packId];
+    if (!pack) {
+        return res.status(400).json({ error: 'Invalid pack' });
+    }
+    
+    // Create order in database
+    const orderId = Math.random().toString(36).substring(7);
+    db.run(
+        'INSERT INTO orders (order_id, telegram_id, pack_id, stars, coins, status) VALUES (?, ?, ?, ?, ?, ?)',
+        [orderId, telegramId, packId, pack.stars, pack.coins, 'pending']
+    );
+    
+    // Return invoice link (you'll need to generate this via Telegram API)
+    res.json({ 
+        orderId: orderId,
+        stars: pack.stars,
+        coins: pack.coins,
+        invoice_link: `https://t.me/$YOUR_BOT_USERNAME/invoice?start=${orderId}`
+    });
+});
+
+// Verify purchase and grant coins
+app.post('/api/verify-star-purchase', (req, res) => {
+    const { orderId, telegramId } = req.body;
+    
+    db.get('SELECT * FROM orders WHERE order_id = ? AND telegram_id = ?', [orderId, telegramId], (err, order) => {
+        if (!order || order.status !== 'pending') {
+            return res.status(400).json({ error: 'Invalid order' });
+        }
+        
+        // Grant coins to user
+        db.run('UPDATE users SET balance = balance + ? WHERE telegram_id = ?', [order.coins, telegramId]);
+        db.run('UPDATE orders SET status = ? WHERE order_id = ?', ['completed', orderId]);
+        
+        res.json({ success: true, coins: order.coins });
+    });
+});

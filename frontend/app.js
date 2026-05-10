@@ -222,6 +222,48 @@ function showToast(message) {
         toast.classList.remove('show');
     }, 2000);
 }
+// Shop purchase handler
+async function purchaseCoins(packId) {
+    const telegramId = tg.initDataUnsafe?.user?.id || 'test_user_123';
+    
+    try {
+        const response = await fetch(`${API_URL}/create-star-order`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ telegramId, packId })
+        });
+        
+        const order = await response.json();
+        
+        // Open Telegram Stars invoice
+        tg.openInvoice(order.invoice_link, async (status) => {
+            if (status === 'paid') {
+                // Verify purchase and grant coins
+                const verifyResponse = await fetch(`${API_URL}/verify-star-purchase`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderId: order.orderId, telegramId })
+                });
+                
+                const result = await verifyResponse.json();
+                if (result.success) {
+                    showToast(`+${result.coins} coins added!`);
+                    // Refresh balance
+                    await loadUserData(telegramId, null);
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Purchase error:', error);
+        showToast('Purchase failed. Try again.');
+    }
+}
 
+// Add event listeners for buy buttons
+document.querySelectorAll('.shop-item').forEach(item => {
+    const btn = item.querySelector('.buy-btn');
+    const packId = item.dataset.pack;
+    btn.addEventListener('click', () => purchaseCoins(packId));
+});
 // Start the app
 init();
